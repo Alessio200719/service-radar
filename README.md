@@ -112,3 +112,4 @@ Die Seite ist eine **statische** Site (kein Build nötig).
 - **Bewerbungen** → Tabelle `applications`.
 - **Chat** → Tabelle `messages` (inkl. Realtime).
 - Keine `localStorage`-Speicherung mehr für Nutzer/Jobs/Bewerbungen/Nachrichten.
+test
