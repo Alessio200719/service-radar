@@ -2683,6 +2683,13 @@ let LANG='de';
    I18N DICTIONARY — every key has de + en
 ══════════════════════════════════════════════════════ */
 const I18N = {
+  'vm.toggle':{de:'Ansicht wechseln', en:'Switch view'},
+  'vm.helper':{de:'🙋 Helfer-Modus', en:'🙋 Helper mode'},
+  'vm.client':{de:'📋 Auftraggeber-Modus', en:'📋 Client mode'},
+  'prof.available':{de:'🔍 Verfügbare Aufträge', en:'🔍 Available jobs'},
+  'prof.create':{de:'📋 Auftrag erstellen', en:'📋 Create a job'},
+  'prof.received':{de:'Eingegangene Bewerbungen', en:'Applications received'},
+  'prof.noreceived':{de:'Noch keine Bewerbungen erhalten.', en:'No applications received yet.'},
   'auth.err.backend':{de:'⚠️ Verbindung zum Server nicht möglich. Bitte später erneut versuchen.', en:'⚠️ Could not reach the server. Please try again later.'},
   'auth.confirm.title':{de:'Registrierung erfolgreich ✅', en:'Registration successful ✅'},
   'auth.confirm.p':{de:'Bitte bestätige deine E-Mail. Wir haben dir einen Bestätigungslink an deine E-Mail-Adresse geschickt.', en:'Please confirm your email. We have sent a confirmation link to your email address.'},
@@ -3264,6 +3271,7 @@ const STATE = {
   threads: [],     // chat threads for current user
   threadMap: {},   // key -> thread
   jobMap: {},      // id -> app-shape job (cache for getJobById)
+  received: [],    // applications received on the current user's jobs
 };
 
 function whenSRReady(){
@@ -3692,7 +3700,7 @@ let APP = {
   user: null, postCat:'g', activeChatId:null, activeThread:null,
   jobFilter:'all', pendingJobId:null, pendingPayJobId:null,
   selectedRole:'jobber', _pendingRatingChatId:null, _pendingRatingPartner:null,
-  _legalUpdateCallback:null, _pendingJobPayload:null,
+  _legalUpdateCallback:null, _pendingJobPayload:null, viewMode:null,
 };
 
 /* ══════════════════════════════════════════════════════
@@ -4146,39 +4154,121 @@ function autoGrow(el){el.style.height='auto';el.style.height=Math.min(el.scrollH
 ══════════════════════════════════════════════════════ */
 async function openProfile(){
   if(!APP.user) return;
+  if(!APP.viewMode) APP.viewMode = localStorage.getItem('sr_viewmode') || (APP.user.role==='auftraggeber'?'client':'helper');
   await loadMyApplications();
-  if(APP.user.role!=='jobber') await loadOwnerJobs();
+  await loadOwnerJobs();
   await loadThreads();
+  await loadReceivedApplications();
   _renderProfile();
   openModal('modal-profile');
+}
+
+// Applications received across the current user's own jobs.
+async function loadReceivedApplications(){
+  if(!window.SR || !APP.user){ STATE.received = []; return; }
+  const jobIds = (STATE.ownerJobs||[]).map(j=>j.id);
+  if(!jobIds.length){ STATE.received = []; return; }
+  try {
+    STATE.received = (await SR.listApplicationsForJobs(jobIds)).map(a=>({
+      id:a.id, jobId:a.job_id, helperId:a.helper_id,
+      helperName:(a.profiles&&a.profiles.full_name)||'Nutzer',
+      jobTitle:(a.jobs&&a.jobs.title)||'',
+      message:a.message||'', status:a.status,
+      ts:a.created_at?Date.parse(a.created_at):Date.now()
+    }));
+  } catch(e){ console.error('[SR] loadReceivedApplications', e); STATE.received = []; }
+}
+
+// View-only mode switch (NO logout, NO Supabase role change).
+function setViewMode(mode){
+  if(mode!=='helper' && mode!=='client') mode='helper';
+  APP.viewMode = mode;
+  try { localStorage.setItem('sr_viewmode', mode); } catch(e){}
+  const m=document.getElementById('modal-profile');
+  if(m && m.classList.contains('open')) _renderProfile();
+}
+
+function openThreadOrList(key){
+  closeModal('modal-profile');
+  if(STATE.threadMap && STATE.threadMap[key]) openChatWin(key); else openChats();
 }
 
 function _renderProfile(){
   if(!APP.user) return;
   const u=APP.user;
+  if(!APP.viewMode) APP.viewMode = localStorage.getItem('sr_viewmode') || (APP.user.role==='auftraggeber'?'client':'helper');
+  const mode = APP.viewMode;
   const apps=getUserApps();
+  const ownedJobs=getAllJobsForOwner();
+  const received=STATE.received||[];
   const chats=STATE.threads.length;
   const ini=u.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-  const isHelper=u.role==='jobber';
-  const ownedJobs = isHelper ? [] : getAllJobsForOwner();
-  const totalSpent = apps.filter(a=>a.paymentStatus==='paid').length * 2;
-  const trustScore = calcTrustScore(u);
-  const trustInfo = getTrustLabel(trustScore);
-  const avgRating = getAvgRating(u.email);
-  const warnings = getWarnings(u.email);
-  const banned = isBanned(u.email);
+  const trustScore=calcTrustScore(u);
+  const trustInfo=getTrustLabel(trustScore);
+  const avgRating=getAvgRating(u.email);
+  const warnings=getWarnings(u.email);
+  const banned=isBanned(u.email);
+
+  const helperBlock = `
+    <div class="stat-row">
+      <div class="sbox"><div class="sv">${apps.length}</div><div class="sl">${T('prof.apps')}</div></div>
+      <div class="sbox"><div class="sv">${chats}</div><div class="sl">${T('prof.chats')}</div></div>
+      <div class="sbox"><div class="sv">${avgRating?'★ '+avgRating:'–'}</div><div class="sl">${T('prof.rating')}</div></div>
+    </div>
+    <button class="btn btn-outline btn-full" style="margin-bottom:14px" onclick="closeModal('modal-profile');scrollToJobs()">${T('prof.available')}</button>
+    <div class="prof-sec-title">${T('prof.apps')}</div>
+    <div class="pj-list">
+      ${apps.length?apps.map(a=>`
+        <div class="pj-row">
+          <div class="pj-t">${esc(a.title||'–')}</div>
+          <div class="pj-p">${a.price||0} €</div>
+          ${a.chatKey?`<button class="pj-pay-now" style="background:var(--c-ink3)" onclick="openThreadOrList('${a.chatKey}')">💬</button>`:''}
+        </div>`).join(''):`<div class="pj-empty">${T('prof.nojobs')}</div>`}
+    </div>`;
+
+  const clientBlock = `
+    <div class="stat-row">
+      <div class="sbox"><div class="sv">${ownedJobs.length}</div><div class="sl">${T('prof.tasks')}</div></div>
+      <div class="sbox"><div class="sv">${received.length}</div><div class="sl">${T('prof.apps')}</div></div>
+      <div class="sbox"><div class="sv">${avgRating?'★ '+avgRating:'–'}</div><div class="sl">${T('prof.rating')}</div></div>
+    </div>
+    <button class="btn btn-dark btn-full" style="margin-bottom:14px" onclick="closeModal('modal-profile');openPostJob()">${T('prof.create')}</button>
+    <div class="prof-sec-title">${T('prof.tasks')}</div>
+    <div class="pj-list">
+      ${ownedJobs.length?ownedJobs.map(j=>{
+        const status=j.status||'active', isPending=status==='pending', isFlagged=status==='flagged';
+        const badge=isPending?`<span class="pj-status pending">${T('prof.status.pending')}</span>`
+          :isFlagged?`<span class="pj-status" style="background:var(--c-rlt);color:var(--c-red)">${T('prof.status.flagged')}</span>`
+          :`<span class="pj-status active">${T('prof.status.active')}</span>`;
+        const payBtn=isPending?`<button class="pj-pay-now" onclick="closeModal('modal-profile');resumePayment('${j.id}')">${T('prof.paynow')}</button>`:'';
+        return `<div class="pj-row${isPending?' pj-row-pending':''}"><div class="pj-t">${esc(jobTitle(j))}</div>${badge}${payBtn}<div class="pj-p" style="margin-left:4px">${j.price} €</div></div>`;
+      }).join(''):`<div class="pj-empty">${T('prof.nojobs')}</div>`}
+    </div>
+    <div class="prof-sec-title" style="margin-top:16px">${T('prof.received')}</div>
+    <div class="pj-list">
+      ${received.length?received.map(r=>`
+        <div class="pj-row">
+          <div class="pj-t">${esc(r.helperName)} <span style="color:var(--c-ink4);font-weight:400">· ${esc(r.jobTitle)}</span><div style="font-size:12px;color:var(--c-ink3);font-weight:400;margin-top:2px">${esc((r.message||'').slice(0,60))}${(r.message||'').length>60?'…':''}</div></div>
+          <button class="pj-pay-now" style="background:var(--c-ink3)" onclick="openThreadOrList('${r.jobId}::${r.helperId}')">💬</button>
+        </div>`).join(''):`<div class="pj-empty">${T('prof.noreceived')}</div>`}
+    </div>`;
 
   document.getElementById('profile-content').innerHTML=`
-    <h3 style="font-size:19px;font-weight:800;margin-bottom:18px">${T('prof.title')}</h3>
+    <h3 style="font-size:19px;font-weight:800;margin-bottom:14px">${T('prof.title')}</h3>
+
+    <div class="mtabs" style="margin-bottom:18px" role="group" data-i18n-aria="vm.toggle">
+      <button class="mtab ${mode==='helper'?'on':''}" onclick="setViewMode('helper')" data-i18n="vm.helper">🙋 Helfer-Modus</button>
+      <button class="mtab ${mode==='client'?'on':''}" onclick="setViewMode('client')" data-i18n="vm.client">📋 Auftraggeber-Modus</button>
+    </div>
 
     ${banned ? `<div class="warn-box" style="margin-bottom:16px"><strong>${T('prof.banned')}</strong> ${T('prof.banned.contact')} <a href="mailto:info@service-radar.com">info@service-radar.com</a></div>` : ''}
-    ${warnings.length > 0 && !banned ? `<div class="warn-box" style="margin-bottom:16px">⚠️ <strong>${warnings.length} ${LANG==='de'?'Verwarnung'+(warnings.length>1?'en':''):'Warning'+(warnings.length>1?'s':'')}</strong> – ${T('prof.warn.text')}</div>` : ''}
+    ${warnings.length>0 && !banned ? `<div class="warn-box" style="margin-bottom:16px">⚠️ <strong>${warnings.length} ${LANG==='de'?'Verwarnung'+(warnings.length>1?'en':''):'Warning'+(warnings.length>1?'s':'')}</strong> – ${T('prof.warn.text')}</div>` : ''}
 
     <div class="prof-header">
       <div class="prof-av" style="background:linear-gradient(135deg,${colorFor(u.name)})">${ini}</div>
       <div class="prof-av-info">
         <div class="pn">${esc(u.name)}</div>
-        <div class="pr">${u.role==='jobber'?T('role.jobber'):T('role.auftr')} · ${esc(u.email)}</div>
+        <div class="pr">${esc(u.email)}</div>
         <div class="pm" style="display:flex;align-items:center;gap:6px;margin-top:6px">
           <span class="trust-badge ${trustInfo.cls}">${trustInfo.label}</span>
           ${avgRating ? `<span style="font-size:12px;color:#bf8700;font-weight:700">★ ${avgRating}</span>` : ''}
@@ -4186,71 +4276,20 @@ function _renderProfile(){
       </div>
     </div>
 
-    <!-- Trust Score Bar -->
     <div class="trust-score" style="margin-bottom:16px">
       <span style="font-size:12px;color:var(--c-ink3);min-width:80px">${T('prof.trust')}</span>
       <div class="ts-bar"><div class="ts-fill" style="width:${trustScore}%"></div></div>
       <span style="font-size:12px;font-weight:700;color:var(--c-ink2);min-width:32px;text-align:right">${trustScore}%</span>
     </div>
 
-    <!-- Verification checklist -->
     <div class="verif-bar">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--c-ink4);margin-bottom:8px">${T('prof.verifstand')}</div>
-      <div class="verif-item">
-        <div class="verif-dot done">✓</div>
-        <span style="font-size:13px">${T('prof.v.email')}</span>
-      </div>
-      <div class="verif-item">
-        <div class="verif-dot ${u.consentAGB?'done':'open'}">${u.consentAGB?'✓':'○'}</div>
-        <span style="font-size:13px">${T('prof.v.agb')}</span>
-      </div>
-      <div class="verif-item">
-        <div class="verif-dot ${apps.length>0?'done':'pending'}">${apps.length>0?'✓':'!'}</div>
-        <span style="font-size:13px">${apps.length>0?T('prof.activity.yes'):T('prof.activity.no')}</span>
-      </div>
-      <div class="verif-item">
-        <div class="verif-dot open">○</div>
-        <span style="font-size:13px;color:var(--c-ink3)">${T('prof.v.id')} <span style="background:var(--c-alt);color:var(--c-amber);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:4px">${T('prof.soon')}</span></span>
-      </div>
+      <div class="verif-item"><div class="verif-dot done">✓</div><span style="font-size:13px">${T('prof.v.email')}</span></div>
+      <div class="verif-item"><div class="verif-dot ${u.consentAGB?'done':'open'}">${u.consentAGB?'✓':'○'}</div><span style="font-size:13px">${T('prof.v.agb')}</span></div>
+      <div class="verif-item"><div class="verif-dot open">○</div><span style="font-size:13px;color:var(--c-ink3)">${T('prof.v.id')} <span style="background:var(--c-alt);color:var(--c-amber);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:4px">${T('prof.soon')}</span></span></div>
     </div>
 
-    <div class="stat-row">
-      <div class="sbox"><div class="sv">${isHelper?apps.length:ownedJobs.length}</div><div class="sl">${isHelper?T('prof.apps'):T('prof.tasks')}</div></div>
-      <div class="sbox"><div class="sv">${chats}</div><div class="sl">${T('prof.chats')}</div></div>
-      <div class="sbox"><div class="sv">${avgRating?'★ '+avgRating:'–'}</div><div class="sl">${T("prof.rating")||"Bewertung"}</div></div>
-    </div>
-
-    ${isHelper ? `
-    <div class="prof-sec-title">${T('prof.apps')}</div>
-    <div class="pj-list">
-      ${apps.length?apps.map(a=>`
-        <div class="pj-row">
-          <div class="pj-t">${esc(a.title||'–')}</div>
-          <div class="pj-p">${a.price||0} €</div>
-          ${a.chatId?`<button class="pj-pay-now" style="background:var(--c-ink3)" onclick="closeModal('modal-profile');openChatWin('${a.chatId}')">💬</button>`:''}
-        </div>`).join(''):`<div class="pj-empty">${T('prof.nojobs')}</div>`}
-    </div>` : `
-    <div class="prof-sec-title">${T('prof.tasks')}</div>
-    <div class="pj-list">
-      ${ownedJobs.length ? ownedJobs.map(j => {
-        const status = j.status || 'active';
-        const isPending = status === 'pending';
-        const isFlagged = status === 'flagged';
-        let statusBadge = isPending
-          ? `<span class="pj-status pending">${T('prof.status.pending')}</span>`
-          : isFlagged
-          ? `<span class="pj-status" style="background:var(--c-rlt);color:var(--c-red)">${T('prof.status.flagged')}</span>`
-          : `<span class="pj-status active">${T('prof.status.active')}</span>`;
-        const payBtn = isPending
-          ? `<button class="pj-pay-now" onclick="closeModal('modal-profile');resumePayment('${j.id}')">${T('prof.paynow')}</button>`
-          : '';
-        return `<div class="pj-row${isPending?' pj-row-pending':''}">
-          <div class="pj-t">${esc(jobTitle(j))}</div>
-          ${statusBadge}${payBtn}
-          <div class="pj-p" style="margin-left:4px">${j.price} €</div>
-        </div>`;
-      }).join('') : `<div class="pj-empty">${T('prof.nojobs')}</div>`}
-    </div>`}
+    ${mode==='client' ? clientBlock : helperBlock}
 
     <div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn btn-outline btn-full" onclick="closeModal('modal-profile');openChats()">💬 ${T('nav.messages')}</button>
@@ -4258,13 +4297,12 @@ function _renderProfile(){
     </div>
     <hr style="border:none;border-top:1px solid var(--c-bds);margin:16px 0">
     <div style="text-align:center">
-      <button class="btn btn-sm" style="color:#cf222e;background:none;border:1px solid #cf222e;font-size:12px;cursor:pointer" onclick="confirmDeleteAccount()">
-        🗑 ${LANG==='de'?'Konto löschen':'Delete account'}
-      </button>
-      <p style="font-size:11px;color:var(--c-ink4);margin-top:6px">${LANG==='de'?'Nur Sitzung beenden → Abmelden verwenden.':'To only end session → use Sign Out.'}</p>
+      <button class="btn btn-sm" style="color:#cf222e;background:none;border:1px solid #cf222e;font-size:12px;cursor:pointer" onclick="confirmDeleteAccount()">${T('prof.del')}</button>
+      <p style="font-size:11px;color:var(--c-ink4);margin-top:6px">${T('prof.del.hint')}</p>
     </div>`;
 }
 
+/* ── Konto löschen (Self-Service) ───────────────────────── */
 
 /* ── Konto löschen (Self-Service) ───────────────────────── */
 function confirmDeleteAccount() {
@@ -4388,7 +4426,7 @@ function openJobDetail(id){
       </div>
     </div>
     <div class="info-box">${T('jd.fair')} ${fairTip}</div>
-    ${(!APP.user || APP.user.role === 'auftraggeber' || job.poster === APP.user?.id) ? '' : '<button class="btn btn-dark btn-full btn-lg" onclick="openApply('+JSON.stringify(job.id)+')" style="font-size:15px">'+T('jd.intbtn')+'</button>'}
+    ${(!APP.user || job.poster === APP.user?.id) ? '' : '<button class="btn btn-dark btn-full btn-lg" onclick="openApply('+JSON.stringify(job.id)+')" style="font-size:15px">'+T('jd.intbtn')+'</button>'}
     ${APP.user && job.poster === APP.user.id ? '<div class="succ-box" style="margin-top:0;margin-bottom:12px">'+T('jd.own')+'</div>' : ''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
       <div style="background:var(--c-bg1);border:1px solid var(--c-bds);border-radius:var(--r1);padding:10px 14px;flex:1;font-size:11.5px;color:var(--c-ink4);line-height:1.6;margin-right:8px">
@@ -4404,7 +4442,6 @@ function openJobDetail(id){
 ══════════════════════════════════════════════════════ */
 function openApply(jobId){
   if(!APP.user){closeModal('modal-job');openAuth('login');showToast(T('toast.needlogin'));return}
-  if(APP.user.role==='auftraggeber'){showToast(T('toast.nohelper'),'err');return}
   if(isBanned(APP.user.email)){showToast(T('toast.banned'),'err');return}
   // Rate limit: max 15 applications per day
   if(!checkRateLimit('apply')){
@@ -4455,9 +4492,6 @@ async function submitApply(){
 ══════════════════════════════════════════════════════ */
 function openPostJob(){
   if(!APP.user){openAuth('register');showToast(T('toast.needlogin'));return}
-  if(APP.user.role==='jobber'){
-    showToast(T('toast.noclient'),'err');return
-  }
   APP.postCat='g';
   pickCat('g');
   ['ps1','ps2','ps3','ps4','ps-ok'].forEach(id=>{

@@ -162,6 +162,15 @@
         .eq('job_id', jobId)
         .order('created_at', { ascending: false }));
     },
+    // All applications received across a set of (owned) jobs.
+    async listApplicationsForJobs(jobIds) {
+      var list = Array.from(new Set((jobIds || []).filter(Boolean)));
+      if (!list.length) return [];
+      return unwrap(await sb.from('applications')
+        .select('*, profiles:helper_id(full_name), jobs:job_id(title)')
+        .in('job_id', list)
+        .order('created_at', { ascending: false }));
+    },
 
     /* ───────── MESSAGES (chat) ───────── */
     async listMyMessages(me) {
