@@ -2669,8 +2669,11 @@ html[lang="en"] #legal-de-note{display:block}
   }
   if(typeof L !== 'undefined'){ boot(); return; }
   // 1) lokal  2) CDN (jsDelivr)  3) statische OSM-Karte
-  // Load Leaflet from CDN (reliable on Vercel). Falls back to a static OSM map.
-  loadScript('https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js', boot, staticFallback);
+  // Lokale Karten-Lib zuerst (KEIN CDN, da Datei vorhanden). Nur falls sie fehlt:
+  // CDN als Notfall, dann statische OSM-Karte.
+  loadScript('assets/vendor/leaflet.js', boot, function(){
+    loadScript('https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js', boot, staticFallback);
+  });
 })();
 </script>
 <script>

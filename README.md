@@ -13,7 +13,7 @@ service-radar/
    └─ vendor/                      ← lokal gehostete Bibliotheken (kein CDN)
       ├─ leaflet.css               ← enthalten
       ├─ README-LEAFLET.md         ← Anleitung für leaflet.js
-      └─ leaflet.js                ← BITTE EINMALIG ABLEGEN (siehe unten)
+      └─ leaflet.js                ← enthalten (eigenständige Mini-Karten-Lib, kein CDN)
 ```
 
 ## Lokal starten
@@ -28,10 +28,11 @@ python3 -m http.server 8000
 `index.html` per Doppelklick (file://) funktioniert ebenfalls; manche Browser
 laden PDFs aus `file://` aber nur im neuen Tab.
 
-## Noch zu tun (1 Datei)
-`assets/vendor/leaflet.js` (~145 KB) muss einmalig abgelegt werden — Anleitung in
-`assets/vendor/README-LEAFLET.md`. Bis dahin zeigt die Karte automatisch einen
-statischen OpenStreetMap-Fallback (kein externes CDN).
+## Karte
+`assets/vendor/leaflet.js` ist **enthalten** – eine eigenständige, lokale Mini-Karten-
+Bibliothek (Pan/Zoom/Marker/Radius) mit OpenStreetMap-Tiles. Es wird **kein CDN** für die
+Karten-Lib geladen. Nur falls die lokale Datei fehlt, greift als Notfall ein CDN bzw. eine
+statische OSM-Karte. (Die Karten-*Tiles* kommen wie üblich von OpenStreetMap.)
 
 ## Sprache
 DE/EN-Umschalter oben rechts (und im Mobile-Menü). Die Auswahl wird in
